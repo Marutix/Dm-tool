@@ -223,7 +223,7 @@ class DMTool:
 
                 # Update display if DM campaign is running
                 if self.current_task and not self.current_task.done():
-                    self.update_display()
+                    await self.update_display()  # Fixed: added await
 
                 await asyncio.sleep(30)  # Check every 30 seconds
 
@@ -274,20 +274,25 @@ class DMTool:
 
         return all_members
 
-    def update_display(self):
+    async def update_display(self):  # Fixed: made this async
         """Update the display"""
         os.system('cls' if os.name == 'nt' else 'clear')
         self.display_banner()
 
-        online_bots = sum(1 for bot in self.bots if await bot.check_health())
+        # Count online bots using await
+        online_bots = 0
+        for bot in self.bots:
+            if await bot.check_health():
+                online_bots += 1
         total_bots = len(self.bots)
+        
         print(f"{Fore.WHITE}DMs Sent: {Fore.CYAN}{self.sent_count}/{self.total_members}{Style.RESET_ALL}")
         print(f"{Fore.WHITE}Online Bots: {Fore.GREEN}{online_bots}/{total_bots}{Style.RESET_ALL}")
 
         # Show bot status
         statuses = []
         for bot in self.bots:
-            status = "🟢" if await bot.check_health() else "🔴"
+            status = "🟢" if await bot.check_health() else "🔴"  # Fixed: added await
             statuses.append(f"Bot {bot.bot_id}{status}")
         print(f"{Fore.WHITE}Status: {', '.join(statuses)}{Style.RESET_ALL}")
 
@@ -316,10 +321,14 @@ class DMTool:
         print(f"{Fore.YELLOW}Starting DM campaign...{Style.RESET_ALL}")
 
         # Get available healthy bots
-        available_bots = [b for b in self.bots if await b.check_health()]
+        available_bots = []
+        for bot in self.bots:
+            if await bot.check_health():
+                available_bots.append(bot)
+                
         if not available_bots:
             self.logs.append(f"{Fore.RED}No healthy bots available{Style.RESET_ALL}")
-            self.update_display()
+            await self.update_display()  # Fixed: added await
             return
 
         self.logs.append(f"{Fore.GREEN}Using {len(available_bots)} healthy bots{Style.RESET_ALL}")
@@ -328,11 +337,11 @@ class DMTool:
         all_members = await self.get_members_safe(server_id)
         if not all_members:
             self.logs.append(f"{Fore.RED}Could not fetch members from server {server_id}{Style.RESET_ALL}")
-            self.update_display()
+            await self.update_display()  # Fixed: added await
             return
 
         self.total_members = len(all_members)
-        self.update_display()
+        await self.update_display()  # Fixed: added await
 
         # Send DMs with bot failure handling
         success_count = 0
@@ -343,7 +352,11 @@ class DMTool:
                 continue
 
             # Get current healthy bots (they might have failed during the loop)
-            current_healthy_bots = [b for b in available_bots if await b.check_health()]
+            current_healthy_bots = []
+            for bot in available_bots:
+                if await bot.check_health():
+                    current_healthy_bots.append(bot)
+                    
             if not current_healthy_bots:
                 self.logs.append(f"{Fore.RED}All bots failed during campaign!{Style.RESET_ALL}")
                 break
@@ -363,7 +376,7 @@ class DMTool:
                 failed_deliveries += 1
                 self.logs.append(f"{Fore.RED}Failed {member.name} - {reason}{Style.RESET_ALL}")
 
-            self.update_display()
+            await self.update_display()  # Fixed: added await
 
             # Adaptive delay with jitter
             delay = random.uniform(1.0, 3.0)
@@ -378,7 +391,7 @@ class DMTool:
         self.logs.append(f"{Fore.GREEN}Campaign complete: {success_count}/{len(all_members)} sent{Style.RESET_ALL}")
         if failed_deliveries > 0:
             self.logs.append(f"{Fore.YELLOW}Failed deliveries: {failed_deliveries}{Style.RESET_ALL}")
-        self.update_display()
+        await self.update_display()  # Fixed: added await
 
     async def async_input(self, prompt):
         """Non-blocking input for async environments"""
