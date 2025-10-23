@@ -1,472 +1,481 @@
-import discord
+#!/usr/bin/env python3
+"""
+main.py
+- Loads bot tokens from tokens.txt
+- Presents menu with options:
+  1. DM Sender - Send DMs to opted-in users
+  2. Fetch Users - Fetch all user IDs from a server and save to targets.txt
+"""
+
 import asyncio
+import json
+import logging
 import os
-import time
-import random
-from colorama import Fore, Style, init
+import sys
+from typing import List, Set
 
-init(autoreset=True)
+import discord
 
-TOKENS_FILE = "tokens.txt"
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
-class StableBot:
-    """Single bot instance with isolated event loop and failure handling"""
-    def __init__(self, token, bot_id):
-        self.token = token
-        self.bot_id = bot_id
-        self.client = None
-        self.ready = False
-        self.connected = False
-        self.guilds = {}
-        self.last_heartbeat = time.time()
-        self.failed = False
-        self.reconnect_attempts = 0
-        self.max_reconnects = 3
+# ANSI color codes
+PURPLE = '\033[95m'
+WHITE = '\033[97m'
+RESET = '\033[0m'
+BOLD = '\033[1m'
 
-    async def start(self):
-        """Start this bot with comprehensive error handling"""
-        try:
-            intents = discord.Intents.all()
-            self.client = discord.Client(intents=intents)
+# ASCII Art Header
+ASCII_HEADER = f"""{PURPLE}{BOLD}
+ ▄▄▄▄    ██▓     ▒█████   ▒█████  ▓█████▄▓██   ██▓
+▓█████▄ ▓██▒    ▒██▒  ██▒▒██▒  ██▒▒██▀ ██▌▒██  ██▒
+▒██▒ ▄██▒██░    ▒██░  ██▒▒██░  ██▒░██   █▌ ▒██ ██░
+▒██░█▀  ▒██░    ▒██   ██░▒██   ██░░▓█▄   ▌ ░ ▐██▓░
+░▓█  ▀█▓░██████▒░ ████▓▒░░ ████▓▒░░▒████▓  ░ ██▒▓░
+░▒▓███▀▒░ ▒░▓  ░░ ▒░▒░▒░ ░ ▒░▒░▒░  ▒▒▓  ▒   ██▒▒▒ 
+▒░▒   ░ ░ ░ ▒  ░  ░ ▒ ▒░   ░ ▒ ▒░  ░ ▒  ▒ ▓██ ░▒░ 
+ ░    ░   ░ ░   ░ ░ ░ ▒  ░ ░ ░ ▒   ░ ░  ░ ▒ ▒ ░░  
+ ░          ░  ░    ░ ░      ░ ░     ░    ░ ░     
+      ░                            ░      ░ ░     
+ ██▒   █▓    ██▓                                  
+▓██░   █▒   ▓██▒                                  
+ ▓██  █▒░   ▒██▒                                  
+  ▒██ █░░   ░██░                                  
+   ▒▀█░     ░██░                                  
+   ░ ▐░     ░▓                                    
+   ░ ░░      ▒ ░                                  
+     ░░      ▒ ░                                  
+      ░      ░                                    
+     ░                                            
+{RESET}"""
 
-            @self.client.event
-            async def on_ready():
-                self.ready = True
-                self.connected = True
-                self.reconnect_attempts = 0
-                self.last_heartbeat = time.time()
-                # Cache guilds we're in
-                for guild in self.client.guilds:
-                    self.guilds[guild.id] = guild
-                print(f"{Fore.GREEN}Bot {self.bot_id} ready: {self.client.user} ({len(self.guilds)} servers){Style.RESET_ALL}")
+def display_menu():
+    """Display the main menu"""
+    print(ASCII_HEADER)
+    print(f"{WHITE}{'―' * 60}{RESET}")
+    print(f"{WHITE}1. DM Sender - Send DMs to opted-in users{RESET}")
+    print(f"{WHITE}2. Fetch Users - Fetch all user IDs from a server and save to targets.txt{RESET}")
+    print(f"{WHITE}3. Exit{RESET}")
+    print(f"{WHITE}{'―' * 60}{RESET}")
 
-            @self.client.event
-            async def on_disconnect():
-                self.connected = False
-                print(f"{Fore.YELLOW}Bot {self.bot_id} disconnected{Style.RESET_ALL}")
-
-            @self.client.event
-            async def on_error(event, *args, **kwargs):
-                print(f"{Fore.RED}Bot {self.bot_id} error in {event}: {args}{Style.RESET_ALL}")
-
-            await self.client.start(self.token)
-
-        except discord.LoginFailure:
-            print(f"{Fore.RED}Bot {self.bot_id} login failed - invalid token{Style.RESET_ALL}")
-            self.failed = True
-        except discord.HTTPException as e:
-            print(f"{Fore.RED}Bot {self.bot_id} HTTP error: {e}{Style.RESET_ALL}")
-            self.failed = True
-        except discord.GatewayNotFound:
-            print(f"{Fore.RED}Bot {self.bot_id} gateway not found{Style.RESET_ALL}")
-            self.failed = True
-        except discord.ConnectionClosed as e:
-            print(f"{Fore.RED}Bot {self.bot_id} connection closed: {e}{Style.RESET_ALL}")
-            self.failed = True
-        except Exception as e:
-            print(f"{Fore.RED}Bot {self.bot_id} unexpected error: {e}{Style.RESET_ALL}")
-            self.failed = True
-
-    async def check_health(self):
-        """Check if bot is still healthy"""
-        if self.failed:
-            return False
-
-        if not self.connected:
-            return False
-
-        # Check if we've had a recent heartbeat
-        if time.time() - self.last_heartbeat > 120:  # 2 minutes without activity
-            print(f"{Fore.YELLOW}Bot {self.bot_id} appears dead (no heartbeat){Style.RESET_ALL}")
-            return False
-
-        return self.ready and self.connected
-
-    async def safe_send_dm(self, user, message):
-        """Safely send DM with bot health checking"""
-        if not await self.check_health():
-            return False, "Bot offline"
-
-        try:
-            # Get or create DM channel
-            dm_channel = user.dm_channel
-            if dm_channel is None:
-                dm_channel = await user.create_dm()
-
-            # Send with timeout
-            send_task = asyncio.create_task(dm_channel.send(message))
-            await asyncio.wait_for(send_task, timeout=10.0)
-
-            self.last_heartbeat = time.time()
-            return True, "Success"
-
-        except discord.Forbidden:
-            return False, "DMs disabled"
-        except discord.HTTPException as e:
-            if e.status == 429:  # Rate limited
-                retry_after = e.retry_after if hasattr(e, 'retry_after') else 5
-                await asyncio.sleep(retry_after)
-                return await self.safe_send_dm(user, message)
-            return False, f"HTTP error: {e}"
-        except (asyncio.TimeoutError, Exception) as e:
-            return False, f"Send failed: {e}"
-
-class DMTool:
-    def __init__(self):
-        self.sent_count = 0
-        self.total_members = 0
-        self.processed_members = set()
-        self.bot_tokens = []
-        self.bots = []
-        self.logs = []
-        self.current_task = None
-        self.health_check_task = None
-
-    def display_banner(self):
-        banner = f"""{Fore.LIGHTMAGENTA_EX}
- ███▄    █  ██▓  ▄████   ▄████  ▄▄▄                                
- ██ ▀█   █ ▓██▒ ██▒ ▀█▒ ██▒ ▀█▒▒████▄                              
-▓██  ▀█ ██▒▒██▒▒██░▄▄▄░▒██░▄▄▄░▒██  ▀█▄                            
-▓██▒  ▐▌██▒░██░░▓█  ██▓░▓█  ██▓░██▄▄▄▄██                           
-▒██░   ▓██░░██░░▒▓███▀▒░▒▓███▀▒ ▓█   ▓██▒                          
-░ ▒░   ▒ ▒ ░▓   ░▒   ▒  ░▒   ▒  ▒▒   ▓▒█░                          
-░ ░░   ░ ▒░ ▒ ░  ░   ░   ░   ░   ▒   ▒▒ ░                          
-   ░   ░ ░  ▒ ░░ ░   ░ ░ ░   ░   ░   ▒                             
-         ░  ░        ░       ░       ░  ░                          
-
-  ██████  ██▓▒██   ██▒     ██████ ▓█████ ██▒   █▓▓█████  ███▄    █ 
-▒██    ▒ ▓██▒▒▒ █ █ ▒░   ▒██    ▒ ▓█   ▀▓██░   █▒▓█   ▀  ██ ▀█   █ 
-░ ▓██▄   ▒██▒░░  █   ░   ░ ▓██▄   ▒███   ▓██  █▒░▒███   ▓██  ▀█ ██▒
-  ▒   ██▒░██░ ░ █ █ ▒      ▒   ██▒▒▓█  ▄  ▒██ █░░▒▓█  ▄ ▓██▒  ▐▌██▒
-▒██████▒▒░██░▒██▒ ▒██▒   ▒██████▒▒░▒████▒  ▒▀█░  ░▒████▒▒██░   ▓██░
-▒ ▒▓▒ ▒ ░░▓  ▒▒ ░ ░▓ ░   ▒ ▒▓▒ ▒ ░░░ ▒░ ░  ░ ▐░  ░░ ▒░ ░░ ▒░   ▒ ▒ 
-░ ░▒  ░ ░ ▒ ░░░   ░▒ ░   ░ ░▒  ░ ░ ░ ░  ░  ░ ░░   ░ ░  ░░ ░░   ░ ▒░
-░  ░  ░   ▒ ░ ░    ░     ░  ░  ░     ░       ░░     ░      ░   ░ ░ 
-      ░   ░   ░    ░           ░     ░  ░     ░     ░  ░         ░ 
-                                             ░                     
-{Style.RESET_ALL}"""
-        print(banner)
-        print("─" * 80)
-
-    def load_tokens(self):
-        """Load bot tokens from file"""
-        try:
-            with open(TOKENS_FILE, 'r') as f:
-                content = f.read().strip()
-                tokens = []
-                for part in content.replace('\r', '\n').split('\n'):
-                    for sub in part.split(','):
-                        token = sub.strip()
-                        if token:
-                            tokens.append(token)
-
-                self.bot_tokens = tokens
-                return len(tokens) > 0
-        except:
-            return False
-
-    async def start_bots_sequential(self):
-        """Start bots one at a time to avoid conflicts"""
-        if not self.load_tokens():
-            print(f"{Fore.RED}No tokens found in {TOKENS_FILE}{Style.RESET_ALL}")
-            return False
-
-        print(f"{Fore.YELLOW}Starting {len(self.bot_tokens)} bots sequentially...{Style.RESET_ALL}")
-
-        successful_bots = 0
-        for i, token in enumerate(self.bot_tokens):
-            try:
-                bot = StableBot(token, i + 1)
-
-                # Start with timeout
-                start_task = asyncio.create_task(bot.start())
-                try:
-                    await asyncio.wait_for(start_task, timeout=30.0)
-                    if not bot.failed:
-                        self.bots.append(bot)
-                        successful_bots += 1
-                        print(f"{Fore.GREEN}Bot {i+1} started successfully{Style.RESET_ALL}")
-                    else:
-                        print(f"{Fore.RED}Bot {i+1} failed to start{Style.RESET_ALL}")
-                except asyncio.TimeoutError:
-                    print(f"{Fore.RED}Bot {i+1} timed out during startup{Style.RESET_ALL}")
-                    start_task.cancel()
-                    bot.failed = True
-
-                # Longer delay between starts
-                await asyncio.sleep(5)
-
-            except Exception as e:
-                print(f"{Fore.RED}Failed to start Bot {i+1}: {e}{Style.RESET_ALL}")
-                continue
-
-        print(f"{Fore.CYAN}Successfully started: {successful_bots}/{len(self.bot_tokens)} bots{Style.RESET_ALL}")
-
-        # Start health monitoring
-        if successful_bots > 0:
-            self.health_check_task = asyncio.create_task(self._health_monitor())
-
-        return successful_bots > 0
-
-    async def _health_monitor(self):
-        """Continuously monitor bot health"""
-        while True:
-            try:
-                online_bots = 0
-                for bot in self.bots:
-                    if await bot.check_health():
-                        online_bots += 1
-                    else:
-                        if not bot.failed:
-                            print(f"{Fore.YELLOW}Bot {bot.bot_id} is unhealthy, marking as failed{Style.RESET_ALL}")
-                            bot.failed = True
-
-                # Update display if DM campaign is running
-                if self.current_task and not self.current_task.done():
-                    await self.update_display()
-
-                await asyncio.sleep(30)  # Check every 30 seconds
-
-            except Exception as e:
-                print(f"{Fore.RED}Health monitor error: {e}{Style.RESET_ALL}")
-                await asyncio.sleep(60)
-
-    async def get_members_safe(self, server_id):
-        """Safely get members from any available bot"""
-        server_id_int = int(server_id)
-        all_members = []
-
-        for bot in self.bots:
-            if not await bot.check_health():
-                continue
-
-            if server_id_int not in bot.guilds:
-                continue
-
-            guild = bot.guilds[server_id_int]
-
-            try:
-                # Method 1: Try cached members first
-                if hasattr(guild, 'members') and guild.members:
-                    members = [m for m in guild.members if not m.bot]
-                    if members:
-                        all_members = members
-                        self.logs.append(f"{Fore.GREEN}Found {len(members)} members using Bot {bot.bot_id}{Style.RESET_ALL}")
-                        break
-
-                # Method 2: Try fetching members
-                if hasattr(guild, 'fetch_members'):
-                    try:
-                        member_list = []
-                        async for member in guild.fetch_members(limit=1000):
-                            if not member.bot:
-                                member_list.append(member)
-                        all_members = member_list
-                        self.logs.append(f"{Fore.GREEN}Fetched {len(member_list)} members using Bot {bot.bot_id}{Style.RESET_ALL}")
-                        break
-                    except Exception as e:
-                        self.logs.append(f"{Fore.YELLOW}Fetch failed for Bot {bot.bot_id}: {e}{Style.RESET_ALL}")
-                        continue
-
-            except Exception as e:
-                self.logs.append(f"{Fore.RED}Bot {bot.bot_id} member error: {e}{Style.RESET_ALL}")
-                continue
-
-        return all_members
-
-    async def update_display(self):
-        """Update the display"""
-        os.system('cls' if os.name == 'nt' else 'clear')
-        self.display_banner()
-
-        # Count online bots
-        online_bots = 0
-        for bot in self.bots:
-            if await bot.check_health():
-                online_bots += 1
-        total_bots = len(self.bots)
+def load_tokens(path: str = "tokens.txt") -> List[str]:
+    if not os.path.exists(path):
+        print(f"{WHITE}tokens file not found: {path}{RESET}")
+        sys.exit(1)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = f.read().strip()
+    except Exception as e:
+        print(f"{WHITE}Error reading tokens file: {e}{RESET}")
+        sys.exit(1)
         
-        print(f"{Fore.WHITE}DMs Sent: {Fore.CYAN}{self.sent_count}/{self.total_members}{Style.RESET_ALL}")
-        print(f"{Fore.WHITE}Online Bots: {Fore.GREEN}{online_bots}/{total_bots}{Style.RESET_ALL}")
+    if not raw:
+        print(f"{WHITE}tokens.txt is empty{RESET}")
+        sys.exit(1)
+    parts = []
+    for part in raw.replace("\n", ",").split(","):
+        t = part.strip()
+        if t:
+            parts.append(t)
+    return parts
 
-        # Show bot status
-        statuses = []
-        for bot in self.bots:
-            if await bot.check_health():
-                status = "🟢"
-            else:
-                status = "🔴"
-            statuses.append(f"Bot {bot.bot_id}{status}")
-        print(f"{Fore.WHITE}Status: {', '.join(statuses)}{Style.RESET_ALL}")
+def load_targets(path: str = "targets.txt") -> List[int]:
+    if not os.path.exists(path):
+        print(f"{WHITE}targets file not found: {path}{RESET}")
+        return []
+    
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw_lines = [line.strip() for line in f.read().splitlines()]
+    except Exception as e:
+        print(f"{WHITE}Error reading targets file: {e}{RESET}")
+        return []
+        
+    ids = []
+    for l in raw_lines:
+        if not l:
+            continue
+        if not l.isdigit():
+            print(f"{WHITE}Skipping invalid ID: {l}{RESET}")
+            continue
+        ids.append(int(l))
+    # de-duplicate while preserving order
+    seen = set()
+    uniq = []
+    for i in ids:
+        if i not in seen:
+            seen.add(i)
+            uniq.append(i)
+    return uniq
 
-        print("─" * 80)
+def save_targets(user_ids: Set[int], path: str = "targets.txt"):
+    """Save user IDs to targets.txt, appending if file exists"""
+    existing_ids = set()
+    
+    # Read existing IDs if file exists
+    if os.path.exists(path):
+        try:
+            existing_targets = load_targets(path)
+            existing_ids = set(existing_targets)
+        except:
+            existing_ids = set()
+    
+    # Combine existing and new IDs
+    all_ids = existing_ids.union(user_ids)
+    
+    # Write all IDs to file
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            for user_id in sorted(all_ids):
+                f.write(f"{user_id}\n")
+        
+        new_count = len(user_ids - existing_ids)
+        existing_count = len(existing_ids)
+        total_count = len(all_ids)
+        
+        print(f"{WHITE}Saved {total_count} user IDs to {path}{RESET}")
+        print(f"{WHITE} - {existing_count} existing IDs{RESET}")
+        print(f"{WHITE} - {new_count} new IDs added{RESET}")
+    except Exception as e:
+        print(f"{WHITE}Error saving targets: {e}{RESET}")
 
-        print(f"{Fore.YELLOW}Recent Logs:{Style.RESET_ALL}")
-        for log in self.logs[-10:]:
-            print(log)
+async def fetch_users_from_guild(token: str, guild_id: int, result_queue: asyncio.Queue):
+    """
+    Connects a bot and fetches all user IDs from the specified guild.
+    """
+    intents = discord.Intents.all()  # Need all intents to fetch members
+    client = discord.Client(intents=intents)
 
-        print("─" * 80)
+    token_preview = (token[:8] + "...") if token else "(empty)"
+    result = {
+        "token_preview": token_preview,
+        "connected": False,
+        "is_member": False,
+        "user_ids": set(),
+        "errors": [],
+    }
 
-    async def mass_dm_stable(self, server_id, message):
-        """Stable mass DM implementation with bot failure handling"""
-        if self.current_task and not self.current_task.done():
-            print(f"{Fore.RED}Already running a DM campaign!{Style.RESET_ALL}")
-            return
-
-        self.current_task = asyncio.create_task(self._run_mass_dm(server_id, message))
-
-    async def _run_mass_dm(self, server_id, message):
-        """Actual DM sending logic with bot failure resilience"""
-        self.sent_count = 0
-        self.processed_members.clear()
-        self.logs.clear()
-
-        print(f"{Fore.YELLOW}Starting DM campaign...{Style.RESET_ALL}")
-
-        # Get available healthy bots
-        available_bots = []
-        for bot in self.bots:
-            if await bot.check_health():
-                available_bots.append(bot)
-                
-        if not available_bots:
-            self.logs.append(f"{Fore.RED}No healthy bots available{Style.RESET_ALL}")
-            await self.update_display()
-            return
-
-        self.logs.append(f"{Fore.GREEN}Using {len(available_bots)} healthy bots{Style.RESET_ALL}")
-
-        # Get members
-        all_members = await self.get_members_safe(server_id)
-        if not all_members:
-            self.logs.append(f"{Fore.RED}Could not fetch members from server {server_id}{Style.RESET_ALL}")
-            await self.update_display()
-            return
-
-        self.total_members = len(all_members)
-        await self.update_display()
-
-        # Send DMs with bot failure handling
-        success_count = 0
-        failed_deliveries = 0
-
-        for i, member in enumerate(all_members):
-            if member.id in self.processed_members:
-                continue
-
-            # Get current healthy bots (they might have failed during the loop)
-            current_healthy_bots = []
-            for bot in available_bots:
-                if await bot.check_health():
-                    current_healthy_bots.append(bot)
-                    
-            if not current_healthy_bots:
-                self.logs.append(f"{Fore.RED}All bots failed during campaign!{Style.RESET_ALL}")
-                break
-
-            # Distribute across available bots
-            bot_index = i % len(current_healthy_bots)
-            bot = current_healthy_bots[bot_index]
-
-            success, reason = await bot.safe_send_dm(member, message)
-
-            if success:
-                success_count += 1
-                self.sent_count = success_count
-                self.processed_members.add(member.id)
-                self.logs.append(f"{Fore.GREEN}Sent to {member.name} (Bot {bot.bot_id}){Style.RESET_ALL}")
-            else:
-                failed_deliveries += 1
-                self.logs.append(f"{Fore.RED}Failed {member.name} - {reason}{Style.RESET_ALL}")
-
-            await self.update_display()
-
-            # Adaptive delay with jitter
-            delay = random.uniform(1.0, 3.0)
-            await asyncio.sleep(delay)
-
-            # Check if we should continue based on failure rate
-            if failed_deliveries > 20 and failed_deliveries / (success_count + failed_deliveries) > 0.8:
-                self.logs.append(f"{Fore.RED}High failure rate, stopping campaign{Style.RESET_ALL}")
-                break
-
-        # Final results
-        self.logs.append(f"{Fore.GREEN}Campaign complete: {success_count}/{len(all_members)} sent{Style.RESET_ALL}")
-        if failed_deliveries > 0:
-            self.logs.append(f"{Fore.YELLOW}Failed deliveries: {failed_deliveries}{Style.RESET_ALL}")
-        await self.update_display()
-
-    async def async_input(self, prompt):
-        """Non-blocking input for async environments"""
-        print(prompt, end='', flush=True)
-        return await asyncio.get_event_loop().run_in_executor(None, input)
-
-    async def shutdown(self):
-        """Proper shutdown"""
-        print(f"{Fore.YELLOW}Shutting down...{Style.RESET_ALL}")
-
-        # Cancel health monitoring
-        if self.health_check_task:
-            self.health_check_task.cancel()
-
-        # Cancel current task
-        if self.current_task and not self.current_task.done():
-            self.current_task.cancel()
-
-        # Shutdown bots
-        for bot in self.bots:
+    @client.event
+    async def on_ready():
+        try:
+            result["connected"] = True
+            me = client.user
+            logging.info(f"[{token_preview}] Connected as {me} (id={me.id})")
+            
+            # Check guild membership and fetch members
             try:
-                if bot.client and not bot.client.is_closed():
-                    await bot.client.close()
-            except:
+                guild = await client.fetch_guild(guild_id)
+                result["is_member"] = True
+                logging.info(f"[{token_preview}] Bot is a member of guild {guild_id} (name: {getattr(guild, 'name', 'unknown')})")
+                
+                # Fetch all members from the guild
+                logging.info(f"[{token_preview}] Fetching members from guild...")
+                async for member in guild.fetch_members(limit=None):
+                    if not member.bot:  # Exclude bots
+                        result["user_ids"].add(member.id)
+                
+                logging.info(f"[{token_preview}] Fetched {len(result['user_ids'])} user IDs from guild")
+                
+            except discord.NotFound:
+                result["is_member"] = False
+                logging.warning(f"[{token_preview}] Bot is NOT a member of guild {guild_id}")
+            except discord.Forbidden:
+                result["errors"].append("Forbidden when fetching guild or members")
+                logging.warning(f"[{token_preview}] Forbidden accessing guild {guild_id}")
+            except Exception as e:
+                result["errors"].append(f"Error fetching members: {e}")
+                logging.exception(f"[{token_preview}] Error fetching members from guild {guild_id}: {e}")
+
+            await client.close()
+            await result_queue.put(result)
+            
+        except Exception as e:
+            logging.exception(f"[{token_preview}] on_ready exception: {e}")
+            result["errors"].append(f"on_ready exception: {e}")
+            try:
+                await client.close()
+            except Exception:
                 pass
+            await result_queue.put(result)
 
-        await asyncio.sleep(2)
-        print(f"{Fore.GREEN}Shutdown complete{Style.RESET_ALL}")
-
-async def main():
-    tool = DMTool()
+    @client.event
+    async def on_error(event, *args, **kwargs):
+        logging.exception(f"[{token_preview}] Event {event} error")
 
     try:
-        tool.display_banner()
-
-        # Start bots
-        if not await tool.start_bots_sequential():
-            await tool.async_input("Press Enter to exit...")
-            return
-
-        # Main loop
-        while True:
-            print(f"\n{Fore.CYAN}Ready for DM campaign{Style.RESET_ALL}")
-
-            # Get inputs
-            server_id = await tool.async_input(f"{Fore.WHITE}>> Enter server ID: {Style.RESET_ALL}")
-            if not server_id or not server_id.isdigit():
-                print(f"{Fore.RED}Invalid server ID!{Style.RESET_ALL}")
-                continue
-
-            message = await tool.async_input(f"{Fore.WHITE}>> Enter DM message: {Style.RESET_ALL}")
-            if not message:
-                print(f"{Fore.RED}Message cannot be empty!{Style.RESET_ALL}")
-                continue
-
-            # Run campaign
-            await tool.mass_dm_stable(server_id, message)
-
-            # Wait for completion
-            while tool.current_task and not tool.current_task.done():
-                await asyncio.sleep(1)
-
-            await tool.async_input(f"{Fore.WHITE}Press Enter to continue...{Style.RESET_ALL}")
-            os.system('cls' if os.name == 'nt' else 'clear')
-            tool.display_banner()
-
-    except KeyboardInterrupt:
-        print(f"\n{Fore.YELLOW}Shutdown requested...{Style.RESET_ALL}")
+        await client.start(token)
     except Exception as e:
-        print(f"{Fore.RED}Fatal error: {e}{Style.RESET_ALL}")
-    finally:
-        await tool.shutdown()
+        logging.exception(f"[{token_preview}] start/connection error: {e}")
+        result["errors"].append(f"start error: {e}")
+        await result_queue.put(result)
+
+async def run_bot(token: str, guild_id: int, assigned_targets: List[int], message_text: str, result_queue: asyncio.Queue, per_message_delay: float = 1.5):
+    """
+    Connects a bot, checks membership, then DMs assigned targets if the bot is a member.
+    Puts a result dictionary on result_queue when finished.
+    """
+    intents = discord.Intents.none()
+    intents.guilds = True
+    intents.members = True
+    intents.presences = True
+    client = discord.Client(intents=intents)
+
+    token_preview = (token[:8] + "...") if token else "(empty)"
+    result = {
+        "token_preview": token_preview,
+        "connected": False,
+        "is_member": False,
+        "members_intent_seems_on": False,
+        "presence_intent_seems_on": False,
+        "dm_sent": 0,
+        "dm_failed": 0,
+        "errors": [],
+    }
+
+    @client.event
+    async def on_ready():
+        try:
+            result["connected"] = True
+            me = client.user
+            logging.info(f"[{token_preview}] Connected as {me} (id={me.id})")
+            # Check guild membership
+            try:
+                guild = await client.fetch_guild(guild_id)
+                result["is_member"] = True
+                logging.info(f"[{token_preview}] Bot is a member of guild {guild_id} (name: {getattr(guild, 'name', 'unknown')})")
+            except discord.NotFound:
+                result["is_member"] = False
+                logging.info(f"[{token_preview}] Bot is NOT a member of guild {guild_id}; skipping DMing.")
+                await client.close()
+                await result_queue.put(result)
+                return
+            except discord.Forbidden:
+                result["errors"].append("Forbidden when fetching guild")
+                logging.warning(f"[{token_preview}] Forbidden fetching guild {guild_id}")
+                await client.close()
+                await result_queue.put(result)
+                return
+            except Exception as e:
+                result["errors"].append(f"fetch_guild error: {e}")
+                logging.exception(f"[{token_preview}] Error fetching guild {guild_id}: {e}")
+                await client.close()
+                await result_queue.put(result)
+                return
+
+            # Heuristics for intents
+            try:
+                try:
+                    cache_len = len(guild.members) if hasattr(guild, "members") else 0
+                except Exception:
+                    cache_len = 0
+                if cache_len > 0:
+                    result["members_intent_seems_on"] = True
+
+                non_none_status = any(getattr(m, "status", None) is not None for m in getattr(guild, "members", []))
+                if non_none_status:
+                    result["presence_intent_seems_on"] = True
+            except Exception:
+                pass
+
+            # Proceed to DM assigned targets
+            if not assigned_targets:
+                logging.info(f"[{token_preview}] No targets assigned to this bot. Closing.")
+                await client.close()
+                await result_queue.put(result)
+                return
+
+            logging.info(f"[{token_preview}] Sending DMs to {len(assigned_targets)} assigned target(s).")
+            for target_id in assigned_targets:
+                try:
+                    user = await client.fetch_user(target_id)
+                    if user is None:
+                        logging.warning(f"[{token_preview}] Could not fetch user {target_id}")
+                        result["dm_failed"] += 1
+                        continue
+
+                    try:
+                        await user.send(message_text)
+                        result["dm_sent"] += 1
+                        logging.info(f"[{token_preview}] DM sent to {target_id}")
+                    except discord.Forbidden:
+                        logging.warning(f"[{token_preview}] Forbidden: cannot send DM to {target_id} (likely DMs closed).")
+                        result["dm_failed"] += 1
+                    except discord.HTTPException as he:
+                        logging.warning(f"[{token_preview}] HTTPException when DMing {target_id}: {he}")
+                        result["dm_failed"] += 1
+                    except Exception as e:
+                        logging.exception(f"[{token_preview}] Unexpected error sending DM to {target_id}: {e}")
+                        result["dm_failed"] += 1
+
+                    await asyncio.sleep(per_message_delay)
+                except Exception as e:
+                    logging.exception(f"[{token_preview}] Error processing target {target_id}: {e}")
+                    result["dm_failed"] += 1
+
+            logging.info(f"[{token_preview}] Finished sending DMs. Sent={result['dm_sent']}, Failed={result['dm_failed']}")
+            await client.close()
+            await result_queue.put(result)
+        except Exception as e:
+            logging.exception(f"[{token_preview}] on_ready exception: {e}")
+            result["errors"].append(f"on_ready exception: {e}")
+            try:
+                await client.close()
+            except Exception:
+                pass
+            await result_queue.put(result)
+
+    @client.event
+    async def on_error(event, *args, **kwargs):
+        logging.exception(f"[{token_preview}] Event {event} error")
+
+    try:
+        await client.start(token)
+    except Exception as e:
+        logging.exception(f"[{token_preview}] start/connection error: {e}")
+        result["errors"].append(f"start error: {e}")
+        await result_queue.put(result)
+
+def distribute_targets_among_tokens(targets: List[int], num_buckets: int) -> List[List[int]]:
+    """
+    Round-robin distribute targets into num_buckets so each bot gets a different set.
+    """
+    buckets = [[] for _ in range(num_buckets)]
+    for i, t in enumerate(targets):
+        buckets[i % num_buckets].append(t)
+    return buckets
+
+async def dm_sender_flow():
+    """Handle the DM sender workflow"""
+    print(f"{WHITE}=== DM Sender ==={RESET}")
+    tokens = load_tokens("tokens.txt")
+    print(f"{WHITE}Loaded {len(tokens)} token(s).{RESET}")
+    
+    guild_id_raw = input(f"{WHITE}Enter the server (guild) ID to check: {RESET}").strip()
+    if not guild_id_raw.isdigit():
+        print(f"{WHITE}Guild ID must be numeric.{RESET}")
+        return
+    guild_id = int(guild_id_raw)
+
+    targets_path = input(f"{WHITE}Enter targets file path (default targets.txt): {RESET}").strip() or "targets.txt"
+    targets = load_targets(targets_path)
+    if not targets:
+        print(f"{WHITE}No valid target IDs found in targets file.{RESET}")
+        return
+    print(f"{WHITE}Loaded {len(targets)} unique target user IDs from {targets_path}.{RESET}")
+
+    message_text = input(f"{WHITE}Enter the message to DM the opted-in users (single line): {RESET}").strip()
+    if not message_text:
+        print(f"{WHITE}Empty message; aborting.{RESET}")
+        return
+
+    print(f"{WHITE}Process started. Bots will begin sending DMs to assigned targets (opt-ins).{RESET}")
+
+    assignments = distribute_targets_among_tokens(targets, len(tokens))
+
+    per_message_delay = 1.5
+    result_queue = asyncio.Queue()
+    tasks = []
+    
+    max_concurrent_connections = min(16, len(tokens))
+    sem = asyncio.Semaphore(max_concurrent_connections)
+
+    async def wrapper(tok, assigned):
+        async with sem:
+            await run_bot(tok, guild_id, assigned, message_text, result_queue, per_message_delay=per_message_delay)
+
+    for tok, assigned in zip(tokens, assignments):
+        tasks.append(asyncio.create_task(wrapper(tok, assigned)))
+
+    results = []
+    for _ in range(len(tasks)):
+        res = await result_queue.get()
+        results.append(res)
+        tp = res["token_preview"]
+        print(f"{WHITE}[{tp}] connected={res['connected']} is_member={res['is_member']} sent={res['dm_sent']} failed={res['dm_failed']} errors={len(res['errors'])}{RESET}")
+
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+    with open("dm_report.json", "w", encoding="utf-8") as f:
+        json.dump(results, f, indent=2)
+
+    print(f"{WHITE}Done. Report saved to dm_report.json{RESET}")
+
+async def fetch_users_flow():
+    """Handle the user fetching workflow"""
+    print(f"{WHITE}=== User Fetcher ==={RESET}")
+    tokens = load_tokens("tokens.txt")
+    print(f"{WHITE}Loaded {len(tokens)} token(s).{RESET}")
+    
+    guild_id_raw = input(f"{WHITE}Enter the server (guild) ID to fetch users from: {RESET}").strip()
+    if not guild_id_raw.isdigit():
+        print(f"{WHITE}Guild ID must be numeric.{RESET}")
+        return
+    guild_id = int(guild_id_raw)
+
+    print(f"{WHITE}Starting to fetch users from the server...{RESET}")
+    print(f"{WHITE}All bots will go online and collect user IDs...{RESET}")
+
+    result_queue = asyncio.Queue()
+    tasks = []
+    
+    max_concurrent_connections = min(16, len(tokens))
+    sem = asyncio.Semaphore(max_concurrent_connections)
+
+    async def wrapper(token):
+        async with sem:
+            await fetch_users_from_guild(token, guild_id, result_queue)
+
+    for token in tokens:
+        tasks.append(asyncio.create_task(wrapper(token)))
+
+    all_user_ids = set()
+    results = []
+    
+    for _ in range(len(tasks)):
+        res = await result_queue.get()
+        results.append(res)
+        all_user_ids.update(res["user_ids"])
+        
+        tp = res["token_preview"]
+        print(f"{WHITE}[{tp}] connected={res['connected']} is_member={res['is_member']} users_fetched={len(res['user_ids'])} errors={len(res['errors'])}{RESET}")
+
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+    if all_user_ids:
+        save_targets(all_user_ids)
+        print(f"{WHITE}\nSuccessfully collected {len(all_user_ids)} unique user IDs from guild {guild_id}{RESET}")
+        print(f"{WHITE}User IDs have been saved/added to targets.txt{RESET}")
+    else:
+        print(f"{WHITE}\nNo user IDs were collected. Possible reasons:{RESET}")
+        print(f"{WHITE}- Bots are not members of the specified guild{RESET}")
+        print(f"{WHITE}- Guild doesn't exist or bots lack permissions{RESET}")
+        print(f"{WHITE}- No users in the guild{RESET}")
+
+    with open("fetch_report.json", "w", encoding="utf-8") as f:
+        json.dump(results, f, indent=2)
+    print(f"{WHITE}Detailed report saved to fetch_report.json{RESET}")
+
+async def main():
+    try:
+        while True:
+            display_menu()
+            choice = input(f"{WHITE}Select an option (1-3): {RESET}").strip()
+            
+            if choice == "1":
+                await dm_sender_flow()
+            elif choice == "2":
+                await fetch_users_flow()
+            elif choice == "3":
+                print(f"{WHITE}Goodbye!{RESET}")
+                break
+            else:
+                print(f"{WHITE}Invalid option. Please select 1, 2, or 3.{RESET}")
+            
+            input(f"{WHITE}\nPress Enter to continue...{RESET}")
+    except KeyboardInterrupt:
+        print(f"\n{WHITE}Interrupted by user. Goodbye!{RESET}")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print(f"\n{WHITE}Interrupted by user. Goodbye!{RESET}")
