@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
 main.py
-- Loads bot tokens from tokens.txt
-- Bots go online, you enter a server ID and message
-- Bots will DM every user in that server automatically
+- Enter tokens directly in the tool
+- Bots go online, then enter server ID and message
+- DMs all users in the server automatically
 """
 
 import asyncio
 import json
 import logging
-import os
 import sys
 from typing import List, Set
 
@@ -51,30 +50,29 @@ def display_menu():
     """Display the main menu"""
     print(ASCII_HEADER)
     print(f"{WHITE}{'―' * 60}{RESET}")
-    print(f"{WHITE}1. DM All Users in Server - Send DMs to every user in a server{RESET}")
+    print(f"{WHITE}1. Start DM Tool - Enter tokens and send DMs{RESET}")
     print(f"{WHITE}2. Exit{RESET}")
     print(f"{WHITE}{'―' * 60}{RESET}")
 
-def load_tokens(path: str = "tokens.txt") -> List[str]:
-    if not os.path.exists(path):
-        print(f"{WHITE}tokens file not found: {path}{RESET}")
-        sys.exit(1)
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            raw = f.read().strip()
-    except Exception as e:
-        print(f"{WHITE}Error reading tokens file: {e}{RESET}")
-        sys.exit(1)
-        
-    if not raw:
-        print(f"{WHITE}tokens.txt is empty{RESET}")
-        sys.exit(1)
-    parts = []
-    for part in raw.replace("\n", ",").split(","):
-        t = part.strip()
-        if t:
-            parts.append(t)
-    return parts
+def get_tokens_from_input():
+    """Get bot tokens from user input"""
+    print(f"{WHITE}Enter bot tokens (comma separated):{RESET}")
+    print(f"{WHITE}Example: token1,token2,token3{RESET}")
+    tokens_input = input(f"{WHITE}Tokens: {RESET}").strip()
+    
+    if not tokens_input:
+        print(f"{WHITE}No tokens entered!{RESET}")
+        return []
+    
+    # Split by comma and clean up
+    tokens = []
+    for token in tokens_input.split(','):
+        cleaned_token = token.strip()
+        if cleaned_token:
+            tokens.append(cleaned_token)
+    
+    print(f"{WHITE}Loaded {len(tokens)} token(s){RESET}")
+    return tokens
 
 async def dm_all_users_in_guild(token: str, guild_id: int, message_text: str, result_queue: asyncio.Queue, per_message_delay: float = 2.0):
     """
@@ -187,8 +185,10 @@ async def dm_all_users_flow():
     """Handle the DM all users workflow"""
     print(f"{WHITE}=== DM All Users in Server ==={RESET}")
     
-    tokens = load_tokens("tokens.txt")
-    print(f"{WHITE}Loaded {len(tokens)} token(s).{RESET}")
+    # Get tokens from user input
+    tokens = get_tokens_from_input()
+    if not tokens:
+        return
     
     # Get server ID
     guild_id_raw = input(f"{WHITE}Enter the server (guild) ID to DM all users: {RESET}").strip()
@@ -206,12 +206,13 @@ async def dm_all_users_flow():
     print(f"{WHITE}Starting process...{RESET}")
     print(f"{WHITE}Bots will fetch all users from server {guild_id} and send DMs{RESET}")
     print(f"{WHITE}Message: {message_text}{RESET}")
+    print(f"{WHITE}Press Ctrl+C to stop at any time{RESET}")
 
     result_queue = asyncio.Queue()
     tasks = []
     
     # Limit concurrent connections
-    max_concurrent_connections = min(5, len(tokens))  # Reduced for stability
+    max_concurrent_connections = min(3, len(tokens))  # Reduced for stability
     sem = asyncio.Semaphore(max_concurrent_connections)
 
     async def wrapper(token):
@@ -228,12 +229,26 @@ async def dm_all_users_flow():
     total_failed = 0
     total_users = 0
     
+    print(f"{WHITE}\n=== Bots Going Online ==={RESET}")
     for _ in range(len(tasks)):
         res = await result_queue.get()
         results.append(res)
         
         tp = res["token_preview"]
-        print(f"{WHITE}[{tp}] members={res['users_fetched']} sent={res['dm_sent']} failed={res['dm_failed']} errors={len(res['errors'])}{RESET}")
+        status = f"{WHITE}[{tp}] "
+        if res["connected"]:
+            if res["is_member"]:
+                status += f"members={res['users_fetched']} sent={res['dm_sent']} failed={res['dm_failed']}"
+            else:
+                status += "NOT_IN_SERVER"
+        else:
+            status += "CONNECTION_FAILED"
+        
+        if res["errors"]:
+            status += f" errors={len(res['errors'])}"
+        
+        status += f"{RESET}"
+        print(status)
         
         total_sent += res["dm_sent"]
         total_failed += res["dm_failed"]
@@ -247,7 +262,10 @@ async def dm_all_users_flow():
     print(f"{WHITE}Total Users Found: {total_users}{RESET}")
     print(f"{WHITE}Total DMs Sent: {total_sent}{RESET}")
     print(f"{WHITE}Total DMs Failed: {total_failed}{RESET}")
-    print(f"{WHITE}Success Rate: {(total_sent/max(total_users,1))*100:.1f}%{RESET}")
+    if total_users > 0:
+        print(f"{WHITE}Success Rate: {(total_sent/total_users)*100:.1f}%{RESET}")
+    else:
+        print(f"{WHITE}Success Rate: 0%{RESET}")
 
     # Save detailed report
     with open("dm_all_report.json", "w", encoding="utf-8") as f:
