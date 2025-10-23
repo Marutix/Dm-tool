@@ -56,6 +56,7 @@ def display_menu():
 
 def get_tokens_from_input():
     """Get bot tokens from user input"""
+    print(f"\n{WHITE}=== Enter Bot Tokens ==={RESET}")
     print(f"{WHITE}Enter bot tokens (comma separated):{RESET}")
     print(f"{WHITE}Example: token1,token2,token3{RESET}")
     tokens_input = input(f"{WHITE}Tokens: {RESET}").strip()
@@ -188,22 +189,23 @@ async def dm_all_users_flow():
     # Get tokens from user input
     tokens = get_tokens_from_input()
     if not tokens:
+        print(f"{WHITE}No tokens provided. Returning to menu.{RESET}")
         return
     
     # Get server ID
-    guild_id_raw = input(f"{WHITE}Enter the server (guild) ID to DM all users: {RESET}").strip()
+    guild_id_raw = input(f"\n{WHITE}Enter the server (guild) ID to DM all users: {RESET}").strip()
     if not guild_id_raw.isdigit():
         print(f"{WHITE}Guild ID must be numeric.{RESET}")
         return
     guild_id = int(guild_id_raw)
 
     # Get message
-    message_text = input(f"{WHITE}Enter the message to send to all users: {RESET}").strip()
+    message_text = input(f"\n{WHITE}Enter the message to send to all users: {RESET}").strip()
     if not message_text:
         print(f"{WHITE}Empty message; aborting.{RESET}")
         return
 
-    print(f"{WHITE}Starting process...{RESET}")
+    print(f"\n{WHITE}Starting process...{RESET}")
     print(f"{WHITE}Bots will fetch all users from server {guild_id} and send DMs{RESET}")
     print(f"{WHITE}Message: {message_text}{RESET}")
     print(f"{WHITE}Press Ctrl+C to stop at any time{RESET}")
@@ -285,6 +287,7 @@ async def main():
                 break
             else:
                 print(f"{WHITE}Invalid option. Please select 1 or 2.{RESET}")
+                continue  # Continue the loop instead of asking for Enter
             
             input(f"{WHITE}\nPress Enter to continue...{RESET}")
     except KeyboardInterrupt:
